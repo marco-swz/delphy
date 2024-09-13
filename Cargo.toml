@@ -1,0 +1,10 @@
+[package]
+name = "graph"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.88"
+num = "0.4.3"
+rusqlite = { version = "0.32.0", features = ["bundled"] }
+savage_core = "0.2.0"
