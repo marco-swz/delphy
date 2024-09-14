@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.88"
+evalexpr = "11.3.0"
+futures = "0.3.30"
 num = "0.4.3"
 rusqlite = { version = "0.32.0", features = ["bundled"] }
-savage_core = "0.2.0"
+sqlx = { version = "0.8.2", features = ["sqlite"] }
