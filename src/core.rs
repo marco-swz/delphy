@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Result};
 use evalexpr::{build_operator_tree, ContextWithMutableVariables, HashMapContext, Value};
-use std::rc::Rc;
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
-
+use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum NodeKind {
@@ -19,8 +20,21 @@ pub enum NodeOutput {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct EdgeDefinition {
+    pub node_id: usize,
+    pub input_id: usize,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct NodeDefinition {
+    pub node_id: usize,
+    pub operation: String,
+    pub kind: usize,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct Node {
-    pub id: i32,
+    pub id: usize,
     pub inputs: RefCell<Vec<Rc<Self>>>,
     kind: NodeKind,
 }
@@ -115,9 +129,86 @@ impl Node {
     }
 }
 
+pub struct Tree {
+    nodes: HashMap<usize, Rc<Node>>,
+}
+
+impl Tree {
+    pub fn new(nodes_definitions: Vec<NodeDefinition>, edge_definitions: Vec<EdgeDefinition>) -> Result<Self> {
+        let mut nodes = HashMap::new();
+        for node_def in &nodes_definitions {
+            if let None = nodes.get_mut(&node_def.node_id) {
+                let node = match node_def.kind {
+                    0 => Rc::new(Node::from_formula(&node_def.operation)?),
+                    _ => Err(anyhow!("Invalid node type"))?,
+                };
+
+                nodes.insert(node_def.node_id, Rc::clone(&node));
+            }
+        }
+
+
+        for edge_def in &edge_definitions {
+            let Some(node) = nodes.remove(&edge_def.node_id) else {
+                return Err(anyhow!("node not found"));
+            };
+
+            let Some(input_node) = nodes.get(&edge_def.input_id) else {
+                return Err(anyhow!("input node not found"));
+            };
+
+            {
+                let mut inputs = node.inputs.borrow_mut();
+                inputs.borrow_mut().push(Rc::clone(input_node));
+            }
+
+            nodes.insert(node.id, Rc::clone(&node));
+        }
+
+        let tree = Self { nodes };
+
+        return Ok(tree);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tree_new() {
+        let edge_defs = vec![
+            EdgeDefinition{
+                node_id: 2,
+                input_id: 0,
+            },
+            EdgeDefinition{
+                node_id: 2,
+                input_id: 1,
+            },
+        ];
+        let node_defs = vec![
+            NodeDefinition{
+                node_id: 0,
+                kind: 0,
+                operation: "a + 1".into(),
+            },
+            NodeDefinition{
+                node_id: 1,
+                kind: 0,
+                operation: "b * 2".into(),
+            },
+            NodeDefinition{
+                node_id: 2,
+                kind: 0,
+                operation: "id0 + id1".into(),
+            },
+        ];
+
+        let tree = Tree::new(node_defs, edge_defs).unwrap();
+
+
+    }
 
     #[test]
     fn test_formula() {
@@ -138,5 +229,4 @@ mod tests {
         let res = node4.eval().unwrap();
         assert_eq!(res, NodeOutput::NumberArray(vec![4., 16.]));
     }
-
 }

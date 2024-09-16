@@ -1,5 +1,5 @@
-pub mod node;
+pub mod core;
+pub use core::{Node, NodeOutput, Tree};
 pub mod database;
-pub use database::Tree;
-pub use node::{Node, NodeOutput};
+pub use database::defintions_from_sqlite;
 
