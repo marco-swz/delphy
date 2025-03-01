@@ -40,7 +40,7 @@ pub fn defintions_from_sqlite(
         let input_id: i32 = edge.try_get("input_id")?;
         node_ids.insert(node_id);
         node_ids.insert(input_id);
-        edge_definitions.push(EdgeDefinition{
+        edge_definitions.push(EdgeDefinition {
             node_id: node_id as usize,
             input_id: node_id as usize,
         });
@@ -65,11 +65,11 @@ pub fn defintions_from_sqlite(
     let mut nodes_definitions = Vec::new();
     for row in &node_query {
         let node_id: i32 = row.try_get("node_id")?;
-        let kind: i32 =  row.try_get("type")?;
-        let node_def = NodeDefinition{
+        let kind: i32 = row.try_get("type")?;
+        let node_def = NodeDefinition {
             node_id: node_id as usize,
             kind: kind as usize,
-            operation: row.try_get("operation")?,
+            value: row.try_get("operation")?,
         };
         nodes_definitions.push(node_def);
     }
@@ -79,9 +79,9 @@ pub fn defintions_from_sqlite(
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{sqlite::SqliteConnectOptions};
-    use futures::executor;
     use super::*;
+    use futures::executor;
+    use sqlx::sqlite::SqliteConnectOptions;
 
     #[test]
     fn test_definitions_from_sqlite() {
@@ -122,19 +122,18 @@ mod tests {
             match def.node_id {
                 1 => {
                     assert_eq!(def.kind, 0);
-                    assert_eq!(def.operation, "a + 2");
-                },
+                    assert_eq!(def.value, "a + 2");
+                }
                 2 => {
                     assert_eq!(def.kind, 1);
-                    assert_eq!(def.operation, "a * 2");
-                },
+                    assert_eq!(def.value, "a * 2");
+                }
                 3 => {
                     assert_eq!(def.kind, 2);
-                    assert_eq!(def.operation, "id0 + id1");
+                    assert_eq!(def.value, "id0 + id1");
                 }
                 _ => assert!(false),
             };
         }
-
     }
 }

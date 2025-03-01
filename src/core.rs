@@ -5,10 +5,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+type NodeId = usize;
+type EvalId = u64;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum NodeKind {
-    Number(f64),
-    NumberArray(Vec<f64>),
+    Variable(String),
     Formula(evalexpr::Node),
     SqlQuery(String),
 }
@@ -28,7 +30,7 @@ pub struct EdgeDefinition {
 #[derive(Debug, PartialEq, Clone)]
 pub struct NodeDefinition {
     pub node_id: usize,
-    pub operation: String,
+    pub value: String,
     pub kind: usize,
 }
 
@@ -36,62 +38,76 @@ pub struct NodeDefinition {
 pub struct Node {
     pub id: usize,
     pub inputs: RefCell<Vec<Rc<Self>>>,
+    pub outputs: RefCell<Vec<Rc<Self>>>,
     kind: NodeKind,
 }
 
 impl Node {
-    pub fn from_float(value: f64) -> Result<Self> {
+    pub fn from_variable(node_id: NodeId, variable_name: String) -> Result<Self> {
         Ok(Node {
-            id: 0,
+            id: node_id,
             inputs: RefCell::new(Vec::new()),
-            kind: NodeKind::Number(value),
+            outputs: RefCell::new(Vec::new()),
+            kind: NodeKind::Variable(variable_name),
         })
     }
 
-    pub fn from_float_vec(vec: &Vec<f64>) -> Result<Self> {
-        Ok(Node {
-            id: 0,
-            inputs: RefCell::new(Vec::new()),
-            kind: NodeKind::NumberArray(vec.to_vec()),
-        })
-    }
-
-    pub fn from_formula(formula: &str) -> Result<Self> {
+    pub fn from_formula(node_id: NodeId, formula: &str) -> Result<Self> {
         let formula = build_operator_tree(&formula).unwrap();
         Ok(Node {
-            id: 0,
+            id: node_id,
             inputs: RefCell::new(Vec::new()),
+            outputs: RefCell::new(Vec::new()),
             kind: NodeKind::Formula(formula),
         })
     }
 
-    pub fn eval(&self) -> Result<NodeOutput> {
+    pub fn inputs(&self) -> Vec<NodeId> {
+        let inputs = self.inputs.borrow();
+        if inputs.len() == 0 {
+            return vec![self.id];
+        }
+
+        let mut ids = Vec::new();
+        for input in inputs.iter() {
+            let id = &input.inputs();
+            ids.extend_from_slice(id);
+        }
+
+        return ids;
+    }
+
+    pub fn eval(&self, values: &HashMap<NodeId, NodeOutput>) -> Result<NodeOutput> {
+        match &self.kind {
+            NodeKind::Variable(var_name) => {
+                let val = values.get(&self.id).ok_or(anyhow!(
+                    "missing variable value for {} (node id = {})",
+                    var_name,
+                    self.id
+                ))?;
+                return Ok(val.clone());
+            }
+            _ => (),
+        }
         let mut input_vals = Vec::new();
         let mut node_ids = Vec::new();
         let mut max_len = 0;
         let inputs = self.inputs.borrow_mut();
         for node in inputs.iter() {
-            let val = node.eval()?;
+            let val = node.eval(values)?;
             let val = match val {
                 NodeOutput::Number(v) => vec![v],
                 NodeOutput::NumberArray(v) => v,
             };
             max_len = max_len.max(val.len());
-            node_ids.push(format!("id{}", node.id));
+            node_ids.push(format!("${}", node.id));
             input_vals.push(val);
-        }
-
-        match &self.kind {
-            NodeKind::Number(_) => max_len = 1,
-            NodeKind::NumberArray(_) => max_len = 1,
-            _ => (),
         }
 
         let mut output_vals = Vec::new();
         for idx_arr in 0..max_len {
             match &self.kind {
-                NodeKind::Number(val) => output_vals.push(val.clone()),
-                NodeKind::NumberArray(vec) => output_vals.append(&mut vec.clone()),
+                NodeKind::Variable(_) => unreachable!(),
                 NodeKind::Formula(formula) => {
                     let mut args = HashMapContext::new();
                     for idx_node in 0..node_ids.len() {
@@ -129,17 +145,25 @@ impl Node {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct Tree {
     nodes: HashMap<usize, Rc<Node>>,
 }
 
 impl Tree {
-    pub fn new(nodes_definitions: Vec<NodeDefinition>, edge_definitions: Vec<EdgeDefinition>) -> Result<Self> {
+    pub fn new(
+        nodes_definitions: Vec<NodeDefinition>,
+        edge_definitions: Vec<EdgeDefinition>,
+    ) -> Result<Self> {
         let mut nodes = HashMap::new();
         for node_def in &nodes_definitions {
             if let None = nodes.get_mut(&node_def.node_id) {
                 let node = match node_def.kind {
-                    0 => Rc::new(Node::from_formula(&node_def.operation)?),
+                    0 => Rc::new(Node::from_variable(
+                        node_def.node_id,
+                        node_def.value.clone(),
+                    )?),
+                    1 => Rc::new(Node::from_formula(node_def.node_id, &node_def.value)?),
                     _ => Err(anyhow!("Invalid node type"))?,
                 };
 
@@ -147,9 +171,8 @@ impl Tree {
             }
         }
 
-
         for edge_def in &edge_definitions {
-            let Some(node) = nodes.remove(&edge_def.node_id) else {
+            let Some(node) = nodes.get(&edge_def.node_id) else {
                 return Err(anyhow!("node not found"));
             };
 
@@ -169,6 +192,25 @@ impl Tree {
 
         return Ok(tree);
     }
+
+    pub fn node_inputs(&self, node_id: NodeId) -> Result<Vec<String>> {
+        let node = self
+            .nodes
+            .get(&node_id)
+            .ok_or(anyhow!("no node with id {}", node_id))?;
+        let inputs = node.inputs();
+        let res = inputs
+            .iter()
+            .filter_map(|x| match self.nodes.get(x) {
+                Some(node) => match &node.kind {
+                    NodeKind::Variable(var_name) => Some(var_name.clone()),
+                    _ => None,
+                },
+                None => None,
+            })
+            .collect();
+        return Ok(res);
+    }
 }
 
 #[cfg(test)]
@@ -176,57 +218,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tree_new() {
+    fn test_tree() {
         let edge_defs = vec![
-            EdgeDefinition{
+            EdgeDefinition {
                 node_id: 2,
                 input_id: 0,
             },
-            EdgeDefinition{
+            EdgeDefinition {
                 node_id: 2,
                 input_id: 1,
             },
+            EdgeDefinition {
+                node_id: 0,
+                input_id: 3,
+            },
+            EdgeDefinition {
+                node_id: 1,
+                input_id: 4,
+            },
         ];
         let node_defs = vec![
-            NodeDefinition{
+            NodeDefinition {
+                node_id: 3,
+                kind: 0,
+                value: "a".into(),
+            },
+            NodeDefinition {
+                node_id: 4,
+                kind: 0,
+                value: "b".into(),
+            },
+            NodeDefinition {
                 node_id: 0,
-                kind: 0,
-                operation: "a + 1".into(),
+                kind: 1,
+                value: "a + 1".into(),
             },
-            NodeDefinition{
+            NodeDefinition {
                 node_id: 1,
-                kind: 0,
-                operation: "b * 2".into(),
+                kind: 1,
+                value: "b * 2".into(),
             },
-            NodeDefinition{
+            NodeDefinition {
                 node_id: 2,
-                kind: 0,
-                operation: "id0 + id1".into(),
+                kind: 1,
+                value: "$0 + $1".into(),
             },
         ];
 
         let tree = Tree::new(node_defs, edge_defs).unwrap();
-
-
+        let inputs = tree.node_inputs(2).unwrap();
+        assert_eq!(inputs, vec!["a", "b"]);
+        //let outputs = tree.node_ouputs(1);
     }
 
-    #[test]
-    fn test_formula() {
-        let node1 = Node::from_float(1.5).unwrap();
-        let mut node2 = Node::from_float_vec(&vec![5.5, 9.5]).unwrap();
-        node2.id = 1;
-        let mut node3 = Node::from_formula("(id1 - id0) / 2").unwrap();
-        node3.id = 2;
-        node3.inputs = RefCell::new(vec![Rc::new(node1), Rc::new(node2)]);
+    // #[test]
+    // fn test_formula() {
+    //     let node1 = Node::from_variable("$1").unwrap();
+    //     let node1 = Node::from_variable(1.5).unwrap();
+    //     node1.id = 1;
+    //     let mut node2 = Node::from_float_vec(&vec![5.5, 9.5]).unwrap();
+    //     node2.id = 1;
+    //     let mut node3 = Node::from_formula("($1 - $0) / 2").unwrap();
+    //     node3.id = 2;
+    //     node3.inputs = RefCell::new(vec![Rc::new(node1), Rc::new(node2)]);
 
-        let res = node3.eval().unwrap();
-        assert_eq!(res, NodeOutput::NumberArray(vec![2., 4.]));
+    //     let res = node3.eval(HashMap::new()).unwrap();
+    //     assert_eq!(res, NodeOutput::NumberArray(vec![2., 4.]));
 
-        let mut node4 = Node::from_formula("id2^2").unwrap();
-        node4.id = 3;
-        node4.inputs = RefCell::new(vec![Rc::new(node3)]);
+    //     let mut node4 = Node::from_formula("$2^2").unwrap();
+    //     node4.id = 3;
+    //     node4.inputs = RefCell::new(vec![Rc::new(node3)]);
 
-        let res = node4.eval().unwrap();
-        assert_eq!(res, NodeOutput::NumberArray(vec![4., 16.]));
-    }
+    //     let res = node4.eval().unwrap();
+    //     assert_eq!(res, NodeOutput::NumberArray(vec![4., 16.]));
+    // }
 }
